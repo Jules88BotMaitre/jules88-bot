@@ -2,7 +2,7 @@ import os
 import json
 import random
 from datetime import datetime
-
+from zoneinfo import ZoneInfo
 import discord
 import requests
 import aiohttp
@@ -323,7 +323,7 @@ async def test(ctx):
 
 @bot.tree.command(name="date", description="Affiche la date et l'heure actuelles")
 async def date_cmd(interaction: discord.Interaction):
-    maintenant = datetime.now().strftime("%d/%m/%Y à %H:%M")
+    maintenant = datetime.now(ZoneInfo("Europe/Paris")).strftime("%d/%m/%Y à %H:%M")
     await interaction.response.send_message(f"Nous sommes le {maintenant}")
 
 
