@@ -361,4 +361,8 @@ if __name__ == "__main__":
     if not TOKEN:
         print("ERREUR : le token n'est pas défini (variable d'environnement DISCORD_TOKEN manquante).")
     else:
+        import threading
+        from bienvenue import boucle_bienvenue
+
+        threading.Thread(target=boucle_bienvenue, daemon=True).start()
         bot.run(TOKEN)
