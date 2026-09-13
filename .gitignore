@@ -1,0 +1,4 @@
+.env
+permissions.json
+__pycache__/
+*.pyc
