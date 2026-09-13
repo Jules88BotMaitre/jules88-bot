@@ -89,7 +89,14 @@ async def on_message(message):
         return
 
     if bot.user.mentioned_in(message):
-        await message.channel.send(f"Alors me ping pour rien non, par contre ping les autres oui, ok {message.author.mention} ? 👀")
+        contenu = message.content.lower()
+
+        if "ça va" in contenu or "ca va" in contenu:
+            await message.channel.send("oui ça va et toi ?")
+        elif "coucou" in contenu:
+            await message.channel.send("coucou !")
+        elif "salut" in contenu:
+            await message.channel.send("salut !")
 
     await bot.process_commands(message)
 
