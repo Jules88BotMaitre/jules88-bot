@@ -14,7 +14,7 @@ except ImportError:
 # ------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------
-# ⚠️ Le token et le secret NE sont plus écrits en dur ici.
+# ⚠️ Le token et le secret ne sont plus écrits en dur ici.
 # Ils viennent des variables d'environnement (voir .env / README).
 TOKEN = os.environ.get("DISCORD_TOKEN")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
