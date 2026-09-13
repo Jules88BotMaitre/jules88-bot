@@ -1,7 +1,11 @@
 import os
 import json
+import random
+from datetime import datetime
+
 import discord
 import requests
+import aiohttp
 from discord import app_commands
 from discord.ext import commands
 
@@ -14,7 +18,7 @@ except ImportError:
 # ------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------
-# ⚠️ Le token et le secret ne sont plus écrits en dur ici.
+# ⚠️ Le token et le secret NE sont plus écrits en dur ici.
 # Ils viennent des variables d'environnement (voir .env / README).
 TOKEN = os.environ.get("DISCORD_TOKEN")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
@@ -71,6 +75,18 @@ def has_access():
 
 
 # ------------------------------------------------------------
+# BLAGUES (pour la commande /blague)
+# ------------------------------------------------------------
+BLAGUES = [
+    "Pourquoi les plongeurs plongent-ils toujours en arrière et jamais en avant ? Parce que sinon ils tombent dans le bateau !",
+    "Qu'est-ce qui est jaune et qui attend ? Jonathan.",
+    "Quel est le comble pour un électricien ? De ne pas être au courant.",
+    "Pourquoi les poissons détestent-ils l'ordinateur ? Ils ont peur du net.",
+    "Que dit un mur à un autre mur ? On se retrouve au coin !",
+]
+
+
+# ------------------------------------------------------------
 # ÉVÉNEMENTS
 # ------------------------------------------------------------
 @bot.event
@@ -84,13 +100,30 @@ async def on_ready():
 
 
 @bot.event
+async def on_member_join(member):
+    channel = member.guild.system_channel
+    if channel is not None:
+        await channel.send(f"Bienvenue sur le serveur {member.mention} ! 🎉")
+
+
+@bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
+    contenu_global = message.content.lower()
+
+    # Bonjour / bonne nuit / merci -- pas besoin de mentionner le bot
+    if "bonjour" in contenu_global:
+        await message.channel.send(f"Bonjour {message.author.mention} !")
+    elif "bonne nuit" in contenu_global:
+        await message.channel.send(f"Bonne nuit {message.author.mention} !")
+    elif "merci" in contenu_global:
+        await message.channel.send(f"Avec plaisir, {message.author.mention} !")
+
+    # Ça va / coucou / salut -- nécessite la mention du bot
     if bot.user.mentioned_in(message):
         contenu = message.content.lower()
-
         if "ça va" in contenu or "ca va" in contenu:
             await message.channel.send("oui ça va et toi ?")
         elif "coucou" in contenu:
@@ -286,6 +319,39 @@ async def ping(interaction: discord.Interaction):
 @bot.command(name="test")
 async def test(ctx):
     await ctx.send("Ça marche !")
+
+
+@bot.tree.command(name="date", description="Affiche la date et l'heure actuelles")
+async def date_cmd(interaction: discord.Interaction):
+    maintenant = datetime.now().strftime("%d/%m/%Y à %H:%M")
+    await interaction.response.send_message(f"Nous sommes le {maintenant}")
+
+
+@bot.tree.command(name="blague", description="Raconte une blague")
+async def blague_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message(random.choice(BLAGUES))
+
+
+@bot.tree.command(name="stats", description="Affiche les statistiques de Vikidia")
+async def stats_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = "https://fr.vikidia.org/w/api.php?action=query&meta=siteinfo&siprop=statistics&format=json"
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                stats = data["query"]["statistics"]
+                message = (
+                    f"📊 **Statistiques Vikidia**\n"
+                    f"Articles : {stats['articles']}\n"
+                    f"Pages totales : {stats['pages']}\n"
+                    f"Utilisateurs : {stats['users']}\n"
+                    f"Utilisateurs actifs : {stats['activeusers']}\n"
+                    f"Modifications : {stats['edits']}"
+                )
+                await interaction.followup.send(message)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Impossible de récupérer les statistiques ({e}).")
 
 
 # ------------------------------------------------------------
