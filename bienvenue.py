@@ -15,7 +15,7 @@ BOT_PASSWORD = os.environ.get("VIKIDIA_BOT_PASSWORD")
 
 WELCOMED_FILE = "welcomed_users.json"
 PAUSE_ENTRE_VERIFS = 60      # on regarde les nouvelles modifs toutes les 60s
-PAUSE_APRES_MODIF = 70      # pause de sécurité après avoir posté une bienvenue
+PAUSE_APRES_MODIF = 60      # pause de sécurité après avoir posté une bienvenue
 
 session = requests.Session()
 
