@@ -357,6 +357,145 @@ async def stats_cmd(interaction: discord.Interaction):
                 await interaction.followup.send(message)
     except Exception as e:
         await interaction.followup.send(f"❌ Impossible de récupérer les statistiques ({e}).")
+# ==========================================================
+# Commande /userinfo — à coller dans app.py (KataBump)
+# Va dans la classe/fichier où sont déjà déclarées tes autres
+# commandes slash (comme /stats, /date, /blague)
+# ==========================================================
+
+import aiohttp
+import discord
+from discord import app_commands
+from datetime import datetime
+
+VIKIDIA_API = "https://fr.vikidia.org/w/api.php"  # change en "https://en.vikidia.org/w/api.php" si besoin
+
+
+def is_ip(text: str) -> bool:
+    """Détection simple IPv4 / IPv6"""
+    import re
+    ipv4 = re.match(r"^\d{1,3}(\.\d{1,3}){3}$", text)
+    ipv6 = re.match(r"^[0-9a-fA-F:]+$", text) and ":" in text
+    return bool(ipv4 or ipv6)
+
+
+@bot.tree.command(name="userinfo", description="Affiche les infos d'un utilisateur ou d'une IP Vikidia")
+@app_commands.describe(pseudo="Nom d'utilisateur ou adresse IP Vikidia")
+async def userinfo(interaction: discord.Interaction, pseudo: str):
+    await interaction.response.defer()
+
+    async with aiohttp.ClientSession() as session:
+
+        if is_ip(pseudo):
+            # Cas IP : pas de compte, juste blocages + contributions
+            embed = discord.Embed(
+                title=f"📡 IP : {pseudo}",
+                color=discord.Color.orange()
+            )
+            embed.add_field(name="Type", value="Adresse IP (non-connecté)", inline=False)
+
+            # Blocages
+            params_blocks = {
+                "action": "query", "list": "blocks", "bkip": pseudo,
+                "format": "json", "bklimit": "5"
+            }
+            async with session.get(VIKIDIA_API, params=params_blocks) as r:
+                data_blocks = await r.json()
+            blocks = data_blocks.get("query", {}).get("blocks", [])
+            embed.add_field(name="Blocages", value=str(len(blocks)), inline=True)
+
+            # Contributions
+            params_contribs = {
+                "action": "query", "list": "usercontribs", "ucuser": pseudo,
+                "format": "json", "uclimit": "1", "ucprop": "timestamp"
+            }
+            async with session.get(VIKIDIA_API, params=params_contribs) as r:
+                data_contribs = await r.json()
+            contribs = data_contribs.get("query", {}).get("usercontribs", [])
+            if contribs:
+                last_date = contribs[0]["timestamp"][:10]
+                embed.add_field(name="Dernière contribution", value=last_date, inline=True)
+            else:
+                embed.add_field(name="Dernière contribution", value="Aucune trouvée", inline=True)
+
+            embed.add_field(
+                name="Page utilisateur",
+                value=f"[Voir la page](https://fr.vikidia.org/wiki/Sp%C3%A9cial:Contributions/{pseudo})",
+                inline=False
+            )
+
+            await interaction.followup.send(embed=embed)
+            return
+
+        # Cas compte utilisateur
+        params_user = {
+            "action": "query", "list": "users", "ususers": pseudo,
+            "usprop": "groups|registration|editcount|blockinfo",
+            "format": "json"
+        }
+        async with session.get(VIKIDIA_API, params=params_user) as r:
+            data_user = await r.json()
+
+        users = data_user.get("query", {}).get("users", [])
+        if not users or "missing" in users[0]:
+            await interaction.followup.send(f"❌ Aucun utilisateur trouvé pour `{pseudo}`.")
+            return
+
+        user = users[0]
+        name = user.get("name", pseudo)
+        registration = user.get("registration", "Inconnue")
+        if registration and registration != "Inconnue":
+            registration = registration[:10]
+        editcount = user.get("editcount", 0)
+        groups = user.get("groups", [])
+
+        # Traduction des groupes utiles
+        statuts = []
+        if "autopatrolled" in groups:
+            statuts.append("Autopatrolled")
+        if "patrol" in groups or "patroller" in groups:
+            statuts.append("Patrouilleur")
+        if "autoconfirmed" in groups or "autoconfirmed" in groups:
+            statuts.append("Autoconfirmé")
+        if not statuts:
+            statuts.append("Connecté (sans statut particulier)")
+
+        # Blocages (historique via liste des logs de blocage)
+        params_logs = {
+            "action": "query", "list": "logevents", "letype": "block",
+            "letitle": f"Utilisateur:{name}", "format": "json", "lelimit": "50"
+        }
+        async with session.get(VIKIDIA_API, params=params_logs) as r:
+            data_logs = await r.json()
+        block_count = len(data_logs.get("query", {}).get("logevents", []))
+
+        # Dernière contribution
+        params_contribs = {
+            "action": "query", "list": "usercontribs", "ucuser": name,
+            "format": "json", "uclimit": "1", "ucprop": "timestamp"
+        }
+        async with session.get(VIKIDIA_API, params=params_contribs) as r:
+            data_contribs = await r.json()
+        contribs = data_contribs.get("query", {}).get("usercontribs", [])
+        last_contrib = contribs[0]["timestamp"][:10] if contribs else "Aucune"
+
+        embed = discord.Embed(
+            title=f"👤 {name}",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Type", value="Compte utilisateur", inline=True)
+        embed.add_field(name="Créé le", value=registration, inline=True)
+        embed.add_field(name="Statuts", value=", ".join(statuts), inline=False)
+        embed.add_field(name="Blocages reçus", value=str(block_count), inline=True)
+        embed.add_field(name="Contributions totales", value=str(editcount), inline=True)
+        embed.add_field(name="Dernière contribution", value=last_contrib, inline=True)
+        embed.add_field(
+            name="Page utilisateur",
+            value=f"[Voir la page](https://fr.vikidia.org/wiki/Utilisateur:{name.replace(' ', '_')})",
+            inline=False
+        )
+
+        await interaction.followup.send(embed=embed)
 
 
 # ------------------------------------------------------------
