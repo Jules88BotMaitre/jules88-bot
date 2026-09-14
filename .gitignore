@@ -2,3 +2,5 @@
 permissions.json
 __pycache__/
 *.pyc
+user-config.py
+user-password.py
