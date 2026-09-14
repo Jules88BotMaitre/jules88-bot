@@ -118,7 +118,7 @@ async def on_message(message):
         await message.channel.send(f"Bonjour {message.author.mention} !")
     elif "bonne nuit" in contenu_global:
         await message.channel.send(f"Bonne nuit {message.author.mention} !")
-    elif "merci" in contenu_global:
+    elif "merci Jules88!!" in contenu_global:
         await message.channel.send(f"Avec plaisir, {message.author.mention} !")
 
     # Ça va / coucou / salut -- nécessite la mention du bot
