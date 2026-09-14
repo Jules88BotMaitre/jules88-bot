@@ -320,6 +320,11 @@ async def ping(interaction: discord.Interaction):
 async def test(ctx):
     await ctx.send("Ça marche !")
 
+@bot.tree.command(name="dédicace", description="Affiche les remerciements")
+async def dedicace(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "Merci à Célian, Janus, Muffy Linedwell, Bulest, Bahati11, Thilp, Blackcurrant pour m'avoir encouragé sur vikidia et m'aider."
+    )
 
 @bot.tree.command(name="date", description="Affiche la date et l'heure actuelles")
 async def date_cmd(interaction: discord.Interaction):
