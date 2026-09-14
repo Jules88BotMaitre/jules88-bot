@@ -125,7 +125,7 @@ def souhaiter_bienvenue(username, csrf_token):
 def boucle_bienvenue():
     """Boucle principale : à lancer en tâche de fond (thread) ou en script à part."""
     if not BOT_USERNAME or not BOT_PASSWORD:
-        print("[bienvenue] ❌ VIKIDIA_BOT_USERNAME / VIKIDIA_BOT_PASSWORD manquants, script arrêté.")
+        print("[bienvenue] ❌ VIKIDIA_BOT_USERNAME / VIKIDIA_BOT_PASSWORD manquants ou incorrect, script arrêté.")
         return
 
     if not se_connecter():
