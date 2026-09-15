@@ -229,7 +229,7 @@ EN_BOT_USERNAME = os.getenv("VIKIDIA_EN_BOT_USERNAME")
 EN_BOT_PASSWORD = os.getenv("VIKIDIA_EN_BOT_PASSWORD")
 
 WATCH_INTERVAL_SECONDS = 60  # fréquence de vérification des modifications récentes
-EDIT_PAUSE_SECONDS = 120     # pause de sécurité entre deux corrections (comme les autres scripts)
+EDIT_PAUSE_SECONDS = 60     # pause de sécurité entre deux corrections (comme les autres scripts)
 
 
 def login(session: requests.Session) -> None:
