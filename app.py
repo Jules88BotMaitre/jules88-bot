@@ -7,6 +7,7 @@ from discord.ext import tasks
 import discord
 import requests
 import aiohttp
+from alerte_et_autre import start_watch_categories
 from discord import app_commands
 from discord.ext import commands
 
@@ -520,4 +521,5 @@ async def rappel_renouvellement():
 async def before_rappel():
     await bot.wait_until_ready()
 rappel_renouvellement.start()
+threading.Thread(target=start_watch_categories, args=(bot, OWNER_ID), daemon=True).start()
         bot.run(TOKEN)
