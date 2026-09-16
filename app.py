@@ -23,7 +23,7 @@ except ImportError:
 # Ils viennent des variables d'environnement (voir .env / README).
 TOKEN = os.environ.get("DISCORD_TOKEN")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
-
+RENEWAL_CHANNEL_ID = 371751530824728579
 API_SECRET = os.environ.get("DISCORD_BOT_API_SECRET")
 SITE_URL = os.environ.get("SITE_URL", "https://jules88.pythonanywhere.com")
 
