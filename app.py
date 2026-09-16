@@ -520,6 +520,9 @@ async def rappel_renouvellement():
 @rappel_renouvellement.before_loop
 async def before_rappel():
     await bot.wait_until_ready()
-rappel_renouvellement.start()
+@bot.event
+async def on_ready():
+    if not rappel_renouvellement.is_running():
+        rappel_renouvellement.start()
 threading.Thread(target=start_watch_categories, args=(bot, OWNER_ID), daemon=True).start()
         bot.run(TOKEN)
