@@ -525,4 +525,4 @@ async def on_ready():
     if not rappel_renouvellement.is_running():
         rappel_renouvellement.start()
 threading.Thread(target=start_watch_categories, args=(bot, OWNER_ID), daemon=True).start()
-        bot.run(TOKEN)
+bot.run(TOKEN)
