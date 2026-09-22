@@ -511,15 +511,7 @@ if __name__ == "__main__":
         from bienvenue import boucle_bienvenue
 
         threading.Thread(target=boucle_bienvenue, daemon=True).start()
-@tasks.loop(hours=72)
-async def rappel_renouvellement():
-    channel = bot.get_channel(RENEWAL_CHANNEL_ID)
-    if channel:
-        await channel.send(f"<@{OWNER_ID}> ⏰ Rappel : pense à renouveler le serveur KataBump avant qu'il ne soit suspendu !")
 
-@rappel_renouvellement.before_loop
-async def before_rappel():
-    await bot.wait_until_ready()
 @bot.event
 async def on_ready():
     if not rappel_renouvellement.is_running():
