@@ -33,8 +33,8 @@ import threading
 import requests
 import mwparserfromhell
 
-WATCH_INTERVAL_SECONDS = 30  # fréquence de vérification des modifications récentes
-EDIT_PAUSE_SECONDS = 60      # pause de sécurité entre deux corrections effectives
+WATCH_INTERVAL_SECONDS = 30
+EDIT_PAUSE_SECONDS = 60
 
 NBSP = "\u00A0"  # espace insécable, utilisée en français avant ; : ! ?
 
@@ -91,13 +91,18 @@ COMMON_TYPO_RULES = [
 _PUNCT_RUN = re.compile(r"[ \t\u00A0]*([;:!?]+)")
 
 # Français : une espace insécable AVANT ; : ! ? (ajoutée si absente, normalisée sinon)
-FR_PUNCT_RULE = (_PUNCT_RUN, NBSP + r"\1")
+_FR_PUNCT_RUN = re.compile(r"(?<=[^\n])[\t ]*([;:!?]+)")
+FR_PUNCT_RULE = (_FR_PUNCT_RUN, NBSP + r"\1")
 
+FR_GUILLEMETS_RULE = (
+    re.compile(r'(?:«[ \t\u00A0]*|"([^"\n]+)")([^»\n]+?)(?:[ \t\u00A0]*»|")'),
+    r"{{\u007C\1\2}}"
+)
 # Anglais : aucune espace avant ; : ! ?
 EN_PUNCT_RULE = (_PUNCT_RUN, r"\1")
 
 LANG_PUNCT_RULES = {
-    "fr": [FR_PUNCT_RULE],
+    "fr": [FR_PUNCT_RULE, FR_GUILLEMETS_RULE],
     "en": [EN_PUNCT_RULE],
 }
 
