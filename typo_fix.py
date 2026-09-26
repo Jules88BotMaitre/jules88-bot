@@ -12,6 +12,14 @@ pas du texte brut (modèles, tags, liens, commentaires) en le remplaçant par de
 jetons. Ainsi le nombre de correction ne "compte" pas ce qu'il y a dans les
 modèles/infobox : leur contenu ressort strictement identique.
 
+IMPORTANT (correction signalée par Célian) : la typographie des ponctuations
+doubles (; : ! ?) diffère entre le français et l'anglais.
+- En français, on DOIT mettre une espace (insécable) avant ; : ! ?
+- En anglais, il ne doit y avoir AUCUNE espace avant ces signes.
+Les règles de ponctuation sont donc désormais appliquées séparément selon la
+langue du site (fr / en), au lieu d'une seule règle commune qui supprimait à
+tort l'espace avant ! et ? sur fr.vikidia.org.
+
 Ce script tourne en tâche de fond sur KataBump (un thread par site, comme
 bienvenue.py) et surveille les deux Vikidia en parallèle. Le résumé de
 modification est adapté à la langue du site : français sur fr.vikidia.org,
@@ -28,12 +36,15 @@ import mwparserfromhell
 WATCH_INTERVAL_SECONDS = 30  # fréquence de vérification des modifications récentes
 EDIT_PAUSE_SECONDS = 60      # pause de sécurité entre deux corrections effectives
 
+NBSP = "\u00A0"  # espace insécable, utilisée en français avant ; : ! ?
+
 # ---------------------------------------------------------------------------
 # Configuration des sites à surveiller (identifiants + résumé dans la bonne langue)
 # ---------------------------------------------------------------------------
 SITES = [
     {
         "nom": "fr",
+        "lang": "fr",
         "api_url": "https://fr.vikidia.org/w/api.php",
         "user_agent": "Jules88!!Bot/typo-fix (fr.vikidia.org)",
         "username": os.getenv("VIKIDIA_BOT_USERNAME_FR"),
@@ -43,6 +54,7 @@ SITES = [
     },
     {
         "nom": "en",
+        "lang": "en",
         "api_url": "https://en.vikidia.org/w/api.php",
         "user_agent": "Jules88!!Bot/typo-fix (en.vikidia.org)",
         "username": os.getenv("VIKIDIA_EN_BOT_USERNAME"),
@@ -55,31 +67,46 @@ SITES = [
 # ---------------------------------------------------------------------------
 # 1. Règles de correction typographique (texte brut uniquement)
 # ---------------------------------------------------------------------------
-# Chaque règle : (regex compilée, remplacement). L'ordre compte.
-TYPO_RULES = [
-    # Espaces doubles (ou plus) -> un seul espace
+# Règles communes aux deux langues (indépendantes de fr/en).
+COMMON_TYPO_RULES = [
+    # Espaces doubles (ou plus, hors insécable) -> un seul espace
     (re.compile(r"[ \t]{2,}"), " "),
-    # Espace avant une virgule / point / point-virgule -> supprimé
-    (re.compile(r" +([,.;])"), r"\1"),
-    # Espace avant ! ou ? -> supprimé (typographie anglaise ; pas d'espace
-    # insécable avant ! ? sur en.vikidia contrairement à fr.vikidia)
-    (re.compile(r" +([!?])"), r"\1"),
+    # Jamais d'espace avant une virgule ou un point (identique fr/en)
+    (re.compile(r"[ \t\u00A0]+([,.])"), r"\1"),
     # Pas d'espace après une parenthèse ouvrante / avant une fermante
     (re.compile(r"\( +"), "("),
     (re.compile(r" +\)"), ")"),
-    # Espace manquant après , . ; ! ? quand suivi directement d'une lettre
+    # Espace manquant après , . ; : ! ? quand suivi directement d'une lettre
     # (mais pas d'un chiffre, pour ne pas casser 1,5 ou une abréviation type "p.ex")
-    (re.compile(r"([,.;!?])(?=[A-Za-z])"), r"\1 "),
+    (re.compile(r"([,.;:!?])(?=[A-Za-z])"), r"\1 "),
     # Espaces en fin de ligne
     (re.compile(r"[ \t]+\n"), "\n"),
     # Plus de 2 sauts de ligne consécutifs -> 2 (un seul paragraphe vide max)
     (re.compile(r"\n{3,}"), "\n\n"),
 ]
 
+# Règles spécifiques à la ponctuation double (; : ! ?), qui diffère selon la langue.
+# On regroupe une éventuelle suite de signes (ex: "?!", "!!!") pour ne jamais
+# insérer d'espace ENTRE deux signes de ponctuation consécutifs.
+_PUNCT_RUN = re.compile(r"[ \t\u00A0]*([;:!?]+)")
 
-def fix_typo_in_text(text: str) -> str:
-    """Applique les règles de typo à un morceau de texte brut."""
-    for pattern, repl in TYPO_RULES:
+# Français : une espace insécable AVANT ; : ! ? (ajoutée si absente, normalisée sinon)
+FR_PUNCT_RULE = (_PUNCT_RUN, NBSP + r"\1")
+
+# Anglais : aucune espace avant ; : ! ?
+EN_PUNCT_RULE = (_PUNCT_RUN, r"\1")
+
+LANG_PUNCT_RULES = {
+    "fr": [FR_PUNCT_RULE],
+    "en": [EN_PUNCT_RULE],
+}
+
+
+def fix_typo_in_text(text: str, lang: str) -> str:
+    """Applique les règles de typo (communes + spécifiques à la langue) à un texte brut."""
+    for pattern, repl in COMMON_TYPO_RULES:
+        text = pattern.sub(repl, text)
+    for pattern, repl in LANG_PUNCT_RULES.get(lang, []):
         text = pattern.sub(repl, text)
     return text
 
@@ -87,7 +114,7 @@ def fix_typo_in_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 # 2. Isolation des zones à ne PAS toucher (modèles/infobox, tags, liens, etc.)
 # ---------------------------------------------------------------------------
-def _process_wikicode(code: "mwparserfromhell.wikicode.Wikicode") -> str:
+def _process_wikicode(code: "mwparserfromhell.wikicode.Wikicode", lang: str) -> str:
     """
     Reconstruit une chaîne à partir d'un objet Wikicode en ne corrigeant que le
     texte visible, niveau par niveau (jamais en mode récursif "à plat" : c'est
@@ -123,12 +150,12 @@ def _process_wikicode(code: "mwparserfromhell.wikicode.Wikicode") -> str:
                 parts.append(str(node))
             else:
                 # Page/mot cible jamais touché ; seul le texte affiché est corrigé.
-                fixed_text = fix_typo_in_text(str(node.text))
+                fixed_text = fix_typo_in_text(str(node.text), lang)
                 parts.append(f"[[{node.title}|{fixed_text}]]")
 
         elif isinstance(node, mwparserfromhell.nodes.ExternalLink):
             if node.title is not None:
-                fixed_title = fix_typo_in_text(str(node.title))
+                fixed_title = fix_typo_in_text(str(node.title), lang)
                 bracket_open = "[" if node.brackets else ""
                 bracket_close = "]" if node.brackets else ""
                 parts.append(f"{bracket_open}{node.url} {fixed_title}{bracket_close}")
@@ -136,11 +163,11 @@ def _process_wikicode(code: "mwparserfromhell.wikicode.Wikicode") -> str:
                 parts.append(str(node))
 
         elif isinstance(node, mwparserfromhell.nodes.Heading):
-            fixed_title = _process_wikicode(node.title)
+            fixed_title = _process_wikicode(node.title, lang)
             parts.append("=" * node.level + fixed_title + "=" * node.level)
 
         elif isinstance(node, mwparserfromhell.nodes.Text):
-            parts.append(fix_typo_in_text(str(node.value)))
+            parts.append(fix_typo_in_text(str(node.value), lang))
 
         else:
             # Argument, HTMLEntity, ou tout nœud non prévu : protégé par défaut.
@@ -149,9 +176,10 @@ def _process_wikicode(code: "mwparserfromhell.wikicode.Wikicode") -> str:
     return "".join(parts)
 
 
-def clean_wikitext(wikitext: str) -> tuple[str, bool]:
+def clean_wikitext(wikitext: str, lang: str) -> tuple[str, bool]:
     """
-    Corrige la typo du texte visible d'une page sans modifier :
+    Corrige la typo du texte visible d'une page (selon la langue `lang`, "fr" ou
+    "en") sans modifier :
     - les modèles {{...}} (donc les infobox, qui sont des modèles sur Vikidia)
     - le contenu des liens fichiers/catégories [[File:...]] (nom, légende compris)
     - la cible des liens internes [[Page|texte]] (seul "texte" est corrigé)
@@ -162,7 +190,7 @@ def clean_wikitext(wikitext: str) -> tuple[str, bool]:
     Retourne (nouveau_wikitexte, a_change).
     """
     code = mwparserfromhell.parse(wikitext)
-    new_wikitext = _process_wikicode(code)
+    new_wikitext = _process_wikicode(code, lang)
     return new_wikitext, new_wikitext != wikitext
 
 
@@ -271,6 +299,7 @@ def get_recent_article_titles(session: requests.Session, api_url: str, user_agen
 # ---------------------------------------------------------------------------
 def watch_and_fix_typo_site(config: dict) -> None:
     nom_site = config["nom"]
+    lang = config["lang"]
     api_url = config["api_url"]
     user_agent = config["user_agent"]
     username = config["username"]
@@ -301,7 +330,7 @@ def watch_and_fix_typo_site(config: dict) -> None:
 
             for title in titles:
                 wikitext, _ = get_wikitext(session, api_url, user_agent, title)
-                new_wikitext, changed = clean_wikitext(wikitext)
+                new_wikitext, changed = clean_wikitext(wikitext, lang)
                 if not changed:
                     continue
 
