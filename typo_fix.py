@@ -35,8 +35,7 @@ import mwparserfromhell
 
 WATCH_INTERVAL_SECONDS = 30
 EDIT_PAUSE_SECONDS = 60
-
-NBSP = "\u00A0"  # espace insécable, utilisée en français avant ; : ! ?
+NBSP = "\u00A0"
 
 # ---------------------------------------------------------------------------
 # Configuration des sites à surveiller (identifiants + résumé dans la bonne langue)
@@ -91,13 +90,14 @@ COMMON_TYPO_RULES = [
 _PUNCT_RUN = re.compile(r"[ \t\u00A0]*([;:!?]+)")
 
 # Français : une espace insécable AVANT ; : ! ? (ajoutée si absente, normalisée sinon)
-_FR_PUNCT_RUN = re.compile(r"(?<=[^\n])[\t ]*([;:!?]+)")
+_FR_PUNCT_RUN = re.compile(r"(?<=[a-zA-Z0-9À-ÿ\)])[\t ]*([;:!?]+)")
 FR_PUNCT_RULE = (_FR_PUNCT_RUN, NBSP + r"\1")
 
 FR_GUILLEMETS_RULE = (
-    re.compile(r'(?:«[ \t\u00A0]*|"([^"\n]+)")([^»\n]+?)(?:[ \t\u00A0]*»|")'),
-    r"{{\u007C\1\2}}"
+    re.compile(r'«[ \t\u00A0]*([^»\n]+?)[ \t\u00A0]*»'),
+    r'{{"|\1}}'
 )
+
 # Anglais : aucune espace avant ; : ! ?
 EN_PUNCT_RULE = (_PUNCT_RUN, r"\1")
 
@@ -150,11 +150,9 @@ def _process_wikicode(code: "mwparserfromhell.wikicode.Wikicode", lang: str) -> 
 
         elif isinstance(node, mwparserfromhell.nodes.Wikilink):
             target = str(node.title).strip().lower()
-            if target.startswith(("file:", "image:", "category:")) or node.text is None:
-                # Fichiers/catégories/liens sans texte affiché : protégés en entier.
+            if target.startswith(("file:", "fichier:", "image:", "category:", "catégorie:")) or node.text is None:
                 parts.append(str(node))
             else:
-                # Page/mot cible jamais touché ; seul le texte affiché est corrigé.
                 fixed_text = fix_typo_in_text(str(node.text), lang)
                 parts.append(f"[[{node.title}|{fixed_text}]]")
 
@@ -165,11 +163,13 @@ def _process_wikicode(code: "mwparserfromhell.wikicode.Wikicode", lang: str) -> 
                 bracket_close = "]" if node.brackets else ""
                 parts.append(f"{bracket_open}{node.url} {fixed_title}{bracket_close}")
             else:
+                # Lien brut (https://...) ou [https://...] sans texte : on ne touche à rien
                 parts.append(str(node))
 
         elif isinstance(node, mwparserfromhell.nodes.Heading):
             fixed_title = _process_wikicode(node.title, lang)
-            parts.append("=" * node.level + fixed_title + "=" * node.level)
+            eq = "=" * node.level
+            parts.append(f"{eq} {fixed_title.strip()} {eq}\n")
 
         elif isinstance(node, mwparserfromhell.nodes.Text):
             parts.append(fix_typo_in_text(str(node.value), lang))
