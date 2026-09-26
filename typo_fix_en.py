@@ -1,5 +1,5 @@
 """
-Script de correction typographique — en.vikidia.org (Jules88!!Bot)
+Script de correction typographique — fr.vikidia.org ET en.vikidia.org
 
 Objectif : corriger la typographie du texte visible d'une page (espaces doubles,
 espaces avant ponctuation, espaces manquants après ponctuation, etc.) SANS toucher
@@ -12,19 +12,45 @@ pas du texte brut (modèles, tags, liens, commentaires) en le remplaçant par de
 jetons. Ainsi le nombre de correction ne "compte" pas ce qu'il y a dans les
 modèles/infobox : leur contenu ressort strictement identique.
 
-À brancher sur le framework existant du bot (login, pause de 120s entre
-modifications, arrêt urgence, détection PDD, statut en ligne/hors ligne) :
-remplacer les fonctions get_wikitext / save_wikitext ci-dessous par les
-équivalents déjà utilisés ailleurs dans mysite/.
+Ce script tourne en tâche de fond sur KataBump (un thread par site, comme
+bienvenue.py) et surveille les deux Vikidia en parallèle. Le résumé de
+modification est adapté à la langue du site : français sur fr.vikidia.org,
+anglais sur en.vikidia.org.
 """
 
+import os
 import re
 import time
+import threading
 import requests
 import mwparserfromhell
 
-API_URL = "https://en.vikidia.org/w/api.php"
-USER_AGENT = "Jules88!!Bot/typo-fix (en.vikidia.org)"
+WATCH_INTERVAL_SECONDS = 30  # fréquence de vérification des modifications récentes
+EDIT_PAUSE_SECONDS = 60      # pause de sécurité entre deux corrections effectives
+
+# ---------------------------------------------------------------------------
+# Configuration des sites à surveiller (identifiants + résumé dans la bonne langue)
+# ---------------------------------------------------------------------------
+SITES = [
+    {
+        "nom": "fr",
+        "api_url": "https://fr.vikidia.org/w/api.php",
+        "user_agent": "Jules88!!Bot/typo-fix (fr.vikidia.org)",
+        "username": os.getenv("VIKIDIA_BOT_USERNAME_FR"),
+        "password": os.getenv("VIKIDIA_BOT_PASSWORD_FR"),
+        "summary": "Correction typographique automatique (espaces, ponctuation) — "
+                   "modèles et infobox non modifiés [bot]",
+    },
+    {
+        "nom": "en",
+        "api_url": "https://en.vikidia.org/w/api.php",
+        "user_agent": "Jules88!!Bot/typo-fix (en.vikidia.org)",
+        "username": os.getenv("VIKIDIA_EN_BOT_USERNAME"),
+        "password": os.getenv("VIKIDIA_EN_BOT_PASSWORD"),
+        "summary": "Automatic typo fix (spacing, punctuation) — "
+                   "templates and infoboxes left unchanged [bot]",
+    },
+]
 
 # ---------------------------------------------------------------------------
 # 1. Règles de correction typographique (texte brut uniquement)
@@ -141,9 +167,37 @@ def clean_wikitext(wikitext: str) -> tuple[str, bool]:
 
 
 # ---------------------------------------------------------------------------
-# 3. Récupération / sauvegarde du wikitexte (à adapter au framework du bot)
+# 3. Connexion / récupération / sauvegarde du wikitexte (paramétrées par site)
 # ---------------------------------------------------------------------------
-def get_wikitext(session: requests.Session, title: str) -> tuple[str, str]:
+def login(session: requests.Session, api_url: str, user_agent: str, username: str, password: str, nom_site: str) -> None:
+    if not username or not password:
+        raise RuntimeError(f"Identifiants manquants pour le site {nom_site} dans le .env")
+
+    r = session.get(
+        api_url,
+        params={"action": "query", "meta": "tokens", "type": "login", "format": "json"},
+        headers={"User-Agent": user_agent},
+    )
+    login_token = r.json()["query"]["tokens"]["logintoken"]
+
+    r = session.post(
+        api_url,
+        data={
+            "action": "login",
+            "lgname": username,
+            "lgpassword": password,
+            "lgtoken": login_token,
+            "format": "json",
+        },
+        headers={"User-Agent": user_agent},
+    )
+    result = r.json().get("login", {})
+    if result.get("result") != "Success":
+        raise RuntimeError(f"Échec de connexion sur {nom_site} : {result}")
+    print(f"[typo-{nom_site}] ✅ Connecté en tant que {username}")
+
+
+def get_wikitext(session: requests.Session, api_url: str, user_agent: str, title: str) -> tuple[str, str]:
     """Retourne (wikitexte, revision_timestamp) de la page."""
     params = {
         "action": "query",
@@ -154,21 +208,21 @@ def get_wikitext(session: requests.Session, title: str) -> tuple[str, str]:
         "format": "json",
         "formatversion": "2",
     }
-    r = session.get(API_URL, params=params, headers={"User-Agent": USER_AGENT})
+    r = session.get(api_url, params=params, headers={"User-Agent": user_agent})
     r.raise_for_status()
     page = r.json()["query"]["pages"][0]
     rev = page["revisions"][0]
     return rev["slots"]["main"]["content"], rev["timestamp"]
 
 
-def get_csrf_token(session: requests.Session) -> str:
+def get_csrf_token(session: requests.Session, api_url: str, user_agent: str) -> str:
     params = {"action": "query", "meta": "tokens", "format": "json"}
-    r = session.get(API_URL, params=params, headers={"User-Agent": USER_AGENT})
+    r = session.get(api_url, params=params, headers={"User-Agent": user_agent})
     return r.json()["query"]["tokens"]["csrftoken"]
 
 
-def save_wikitext(session: requests.Session, title: str, text: str, summary: str) -> None:
-    token = get_csrf_token(session)
+def save_wikitext(session: requests.Session, api_url: str, user_agent: str, title: str, text: str, summary: str) -> None:
+    token = get_csrf_token(session, api_url, user_agent)
     data = {
         "action": "edit",
         "title": title,
@@ -178,90 +232,14 @@ def save_wikitext(session: requests.Session, title: str, text: str, summary: str
         "bot": True,
         "format": "json",
     }
-    r = session.post(API_URL, data=data, headers={"User-Agent": USER_AGENT})
+    r = session.post(api_url, data=data, headers={"User-Agent": user_agent})
     r.raise_for_status()
     result = r.json()
     if "error" in result:
         raise RuntimeError(f"Erreur d'édition sur {title} : {result['error']}")
 
 
-# ---------------------------------------------------------------------------
-# 4. Boucle principale sur une liste de pages
-# ---------------------------------------------------------------------------
-def run_typo_fix(session: requests.Session, titles: list[str], pause_seconds: int = 120) -> None:
-    """
-    Parcourt une liste de titres de pages et corrige leur typographie.
-    Respecte la pause de sécurité entre deux modifications, comme les autres
-    scripts du bot. À brancher sur les vérifications existantes (feu vert,
-    maintenance, arrêt urgence, message sur la PDD du bot) avant chaque édition.
-    """
-    for title in titles:
-        wikitext, _ = get_wikitext(session, title)
-        new_wikitext, changed = clean_wikitext(wikitext)
-
-        if not changed:
-            continue
-
-        save_wikitext(
-            session,
-            title,
-            new_wikitext,
-            summary="Correction typographique automatique (espaces, ponctuation) — "
-                    "modèles et infobox non modifiés [bot]",
-        )
-        print(f"Corrigé : {title}")
-
-        time.sleep(pause_seconds)
-
-
-# ---------------------------------------------------------------------------
-# 5. Version "toujours active" pour KataBump (même principe que bienvenue.py :
-#    thread de fond, boucle infinie, aucun lancement manuel nécessaire)
-# ---------------------------------------------------------------------------
-import os
-import threading
-
-# Identifiants dédiés à ce script, dans le .env de KataBump (à côté de
-# VIKIDIA_BOT_USERNAME/VIKIDIA_BOT_PASSWORD utilisés par bienvenue.py — même
-# compte ou compte dédié typo, au choix ; sur en.vikidia.org il faut se logger
-# séparément même si c'est le même compte que sur fr.vikidia.org).
-EN_BOT_USERNAME = os.getenv("VIKIDIA_EN_BOT_USERNAME")
-EN_BOT_PASSWORD = os.getenv("VIKIDIA_EN_BOT_PASSWORD")
-
-WATCH_INTERVAL_SECONDS = 60  # fréquence de vérification des modifications récentes
-EDIT_PAUSE_SECONDS = 60     # pause de sécurité entre deux corrections (comme les autres scripts)
-
-
-def login(session: requests.Session) -> None:
-    if not EN_BOT_USERNAME or not EN_BOT_PASSWORD:
-        raise RuntimeError(
-            "VIKIDIA_EN_BOT_USERNAME / VIKIDIA_EN_BOT_PASSWORD manquants dans le .env"
-        )
-    r = session.get(
-        API_URL,
-        params={"action": "query", "meta": "tokens", "type": "login", "format": "json"},
-        headers={"User-Agent": USER_AGENT},
-    )
-    login_token = r.json()["query"]["tokens"]["logintoken"]
-
-    r = session.post(
-        API_URL,
-        data={
-            "action": "login",
-            "lgname": EN_BOT_USERNAME,
-            "lgpassword": EN_BOT_PASSWORD,
-            "lgtoken": login_token,
-            "format": "json",
-        },
-        headers={"User-Agent": USER_AGENT},
-    )
-    result = r.json().get("login", {})
-    if result.get("result") != "Success":
-        raise RuntimeError(f"Échec de connexion sur en.vikidia.org : {result}")
-    print("Connecté à en.vikidia.org en tant que", EN_BOT_USERNAME)
-
-
-def get_recent_article_titles(session: requests.Session, since_iso: str) -> list[str]:
+def get_recent_article_titles(session: requests.Session, api_url: str, user_agent: str, since_iso: str) -> list[str]:
     """Titres des pages (espace principal) modifiées depuis `since_iso`."""
     params = {
         "action": "query",
@@ -274,7 +252,7 @@ def get_recent_article_titles(session: requests.Session, since_iso: str) -> list
         "rctype": "edit|new",
         "format": "json",
     }
-    r = session.get(API_URL, params=params, headers={"User-Agent": USER_AGENT})
+    r = session.get(api_url, params=params, headers={"User-Agent": user_agent})
     r.raise_for_status()
     changes = r.json().get("query", {}).get("recentchanges", [])
     # dédoublonnage en conservant l'ordre (une page peut apparaître plusieurs fois)
@@ -288,16 +266,27 @@ def get_recent_article_titles(session: requests.Session, since_iso: str) -> list
     return titles
 
 
-def watch_and_fix_typo() -> None:
-    """
-    Boucle infinie : surveille les modifications récentes de en.vikidia.org
-    toutes les WATCH_INTERVAL_SECONDS, corrige automatiquement la typo des
-    pages touchées (sans jamais modifier modèles/infobox/refs/etc.), avec une
-    pause de EDIT_PAUSE_SECONDS entre deux corrections effectives. Conçu pour
-    tourner en tâche de fond sur KataBump, comme bienvenue.py.
-    """
+# ---------------------------------------------------------------------------
+# 4. Boucle de surveillance pour un site donné, à lancer dans son propre thread
+# ---------------------------------------------------------------------------
+def watch_and_fix_typo_site(config: dict) -> None:
+    nom_site = config["nom"]
+    api_url = config["api_url"]
+    user_agent = config["user_agent"]
+    username = config["username"]
+    password = config["password"]
+    summary = config["summary"]
+
+    if not username or not password:
+        print(f"[typo-{nom_site}] ❌ Identifiants manquants, ce site ne sera pas surveillé.")
+        return
+
     session = requests.Session()
-    login(session)
+    try:
+        login(session, api_url, user_agent, username, password, nom_site)
+    except Exception as e:
+        print(f"[typo-{nom_site}] ❌ {e}")
+        return
 
     # Idempotence : si une page est déjà "propre", clean_wikitext ne renvoie
     # aucun changement, donc pas de risque de boucle même si le bot revoit
@@ -307,31 +296,36 @@ def watch_and_fix_typo() -> None:
     while True:
         try:
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            titles = get_recent_article_titles(session, last_check)
+            titles = get_recent_article_titles(session, api_url, user_agent, last_check)
             last_check = now
 
             for title in titles:
-                wikitext, _ = get_wikitext(session, title)
+                wikitext, _ = get_wikitext(session, api_url, user_agent, title)
                 new_wikitext, changed = clean_wikitext(wikitext)
                 if not changed:
                     continue
 
-                save_wikitext(
-                    session,
-                    title,
-                    new_wikitext,
-                    summary="Correction typographique automatique (espaces, ponctuation) — "
-                            "modèles et infobox non modifiés [bot]",
-                )
-                print(f"Corrigé : {title}")
+                save_wikitext(session, api_url, user_agent, title, new_wikitext, summary)
+                print(f"[typo-{nom_site}] Corrigé : {title}")
                 time.sleep(EDIT_PAUSE_SECONDS)
 
         except Exception as e:
-            print("Erreur dans watch_and_fix_typo :", e)
+            print(f"[typo-{nom_site}] ⚠️ Erreur dans la boucle : {e}")
 
         time.sleep(WATCH_INTERVAL_SECONDS)
 
 
+def watch_and_fix_typo() -> None:
+    """Point d'entrée : lance un thread par site configuré (fr + en)."""
+    threads = []
+    for config in SITES:
+        t = threading.Thread(target=watch_and_fix_typo_site, args=(config,), daemon=True)
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+
+
 if __name__ == "__main__":
-    # Test manuel autonome.
     watch_and_fix_typo()
