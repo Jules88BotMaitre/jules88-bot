@@ -325,7 +325,7 @@ async def test(ctx):
 @bot.tree.command(name="dédicace", description="Affiche les remerciements")
 async def dedicace(interaction: discord.Interaction):
     await interaction.response.send_message(
-        "Merci à Célian, Janus, Muffy Linedwell, Bulest, Bahati11, Thilp, Blackcurrant pour m'avoir encouragé sur vikidia et m'aider."
+        "Merci à Célian, Janus, Muffy Linedwell, Bulest, Loulla, Bahati11, Thilp, Blackcurrant pour m'avoir encouragé sur vikidia et m'aider."
     )
 
 @bot.tree.command(name="date", description="Affiche la date et l'heure actuelles")
