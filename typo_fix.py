@@ -167,9 +167,14 @@ def _process_wikicode(code: "mwparserfromhell.wikicode.Wikicode", lang: str) -> 
                 parts.append(str(node))
 
         elif isinstance(node, mwparserfromhell.nodes.Heading):
+            # NE PAS ajouter de "\n" ici : dans mwparserfromhell, le saut de
+            # ligne qui suit un titre de section ("== Titre ==\n") appartient
+            # déjà au nœud Text suivant, pas au nœud Heading lui-même. Ajouter
+            # un "\n" en plus ici doublait le saut de ligne et créait une
+            # ligne vide indésirable juste après chaque titre corrigé.
             fixed_title = _process_wikicode(node.title, lang)
             eq = "=" * node.level
-            parts.append(f"{eq} {fixed_title.strip()} {eq}\n")
+            parts.append(f"{eq} {fixed_title.strip()} {eq}")
 
         elif isinstance(node, mwparserfromhell.nodes.Text):
             parts.append(fix_typo_in_text(str(node.value), lang))
