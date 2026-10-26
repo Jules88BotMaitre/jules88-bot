@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import threading
 import requests
 
 try:
@@ -9,62 +10,79 @@ try:
 except ImportError:
     pass
 
-API_URL = "https://fr.vikidia.org/w/api.php"
-BOT_USERNAME = os.environ.get("VIKIDIA_BOT_USERNAME")
-BOT_PASSWORD = os.environ.get("VIKIDIA_BOT_PASSWORD")
+PAUSE_ENTRE_VERIFS =  7200     # on regarde les nouvelles modifs toutes les 60s
+PAUSE_APRES_MODIF = 600    # pause de sécurité après avoir posté une bienvenue
 
-WELCOMED_FILE = "welcomed_users.json"
-PAUSE_ENTRE_VERIFS = 4200      # on regarde les nouvelles modifs toutes les 60s
-PAUSE_APRES_MODIF = 4200      # pause de sécurité après avoir posté une bienvenue
+# ------------------------------------------------------------
+# CONFIGURATION DES SITES À SURVEILLER
+# ------------------------------------------------------------
+SITES = [
+    {
+        "nom": "fr",
+        "api_url": "https://fr.vikidia.org/w/api.php",
+        "username": os.environ.get("VIKIDIA_BOT_USERNAME_FR"),
+        "password": os.environ.get("VIKIDIA_BOT_PASSWORD_FR"),
+        "welcomed_file": "welcomed_users_fr.json",
+        "modele_compte": "{{subst:Bienvenue}} ~~~~",
+        "modele_ip": "{{subst:Bienvenue IP}} ~~~~",
+    },
+    {
+        "nom": "en",
+        "api_url": "https://en.vikidia.org/w/api.php",
+        "username": os.environ.get("VIKIDIA_BOT_USERNAME_EN"),
+        "password": os.environ.get("VIKIDIA_BOT_PASSWORD_EN"),
+        "welcomed_file": "welcomed_users_en.json",
+        "modele_compte": "{{subst:Welcome}} ~~~~",
+        "modele_ip": "{{subst:Welcome IP}} ~~~~",
+    },
+]
 
-session = requests.Session()
 
-
-def charger_donnees():
-    if not os.path.exists(WELCOMED_FILE):
+def charger_donnees(fichier):
+    if not os.path.exists(fichier):
         return {"users": [], "last_rcid": 0}
-    with open(WELCOMED_FILE, "r") as f:
+    with open(fichier, "r") as f:
         return json.load(f)
 
 
-def sauver_donnees(data):
-    with open(WELCOMED_FILE, "w") as f:
+def sauver_donnees(fichier, data):
+    with open(fichier, "w") as f:
         json.dump(data, f, indent=2)
 
 
-def se_connecter():
-    r = session.get(API_URL, params={
+def se_connecter(session, api_url, username, password, nom_site):
+    r = session.get(api_url, params={
         "action": "query", "meta": "tokens", "type": "login", "format": "json"
     })
     login_token = r.json()["query"]["tokens"]["logintoken"]
 
-    r = session.post(API_URL, data={
+    r = session.post(api_url, data={
         "action": "login",
-        "lgname": BOT_USERNAME,
-        "lgpassword": BOT_PASSWORD,
+        "lgname": username,
+        "lgpassword": password,
         "lgtoken": login_token,
         "format": "json",
     })
     result = r.json().get("login", {}).get("result")
     if result != "Success":
-        print(f"[bienvenue] ❌ Échec de connexion au bot Vikidia : {result}")
+        print(f"[bienvenue-{nom_site}] ❌ Échec de connexion : {result}")
         return False
-    print("[bienvenue] ✅ Bot connecté à fr.vikidia.org")
+    print(f"[bienvenue-{nom_site}] ✅ Bot connecté")
     return True
 
 
-def obtenir_csrf_token():
-    r = session.get(API_URL, params={
+def obtenir_csrf_token(session, api_url):
+    r = session.get(api_url, params={
         "action": "query", "meta": "tokens", "format": "json"
     })
     return r.json()["query"]["tokens"]["csrftoken"]
 
 
-def get_recent_changes(last_rcid):
-    r = session.get(API_URL, params={
+def get_recent_changes(session, api_url, last_rcid):
+    r = session.get(api_url, params={
         "action": "query",
         "list": "recentchanges",
-        "rcprop": "ids|user|timestamp|title",
+        "rcprop": "ids|user|userid|timestamp|title",
         "rctype": "new|edit",
         "rclimit": 50,
         "rcdir": "older",
@@ -75,23 +93,9 @@ def get_recent_changes(last_rcid):
     return nouvelles, changes
 
 
-def get_editcount(username):
-    r = session.get(API_URL, params={
-        "action": "query",
-        "list": "users",
-        "ususers": username,
-        "usprop": "editcount",
-        "format": "json",
-    })
-    users = r.json().get("query", {}).get("users", [])
-    if users and "editcount" in users[0]:
-        return users[0]["editcount"]
-    return None
-
-
-def pdd_est_vide(username):
-    titre = f"Discussion utilisateur:{username}"
-    r = session.get(API_URL, params={
+def pdd_est_vide(session, api_url, username):
+    titre = f"Discussion utilisateur:{username}" if "fr." in api_url else f"User talk:{username}"
+    r = session.get(api_url, params={
         "action": "query",
         "titles": titre,
         "prop": "info",
@@ -99,14 +103,14 @@ def pdd_est_vide(username):
     })
     pages = r.json().get("query", {}).get("pages", {})
     for page in pages.values():
-        return "missing" in page  # page absente = considérée comme vide
+        return "missing" in page
     return True
 
 
-def souhaiter_bienvenue(username, csrf_token):
-    titre = f"Discussion utilisateur:{username}"
-    contenu = "\n{{subst:Bienvenue}} ~~~~"
-    r = session.post(API_URL, data={
+def souhaiter_bienvenue(session, api_url, username, csrf_token, nom_site, modele):
+    titre = f"Discussion utilisateur:{username}" if "fr." in api_url else f"User talk:{username}"
+    contenu = f"\n{modele}"
+    r = session.post(api_url, data={
         "action": "edit",
         "title": titre,
         "appendtext": contenu,
@@ -116,62 +120,86 @@ def souhaiter_bienvenue(username, csrf_token):
     })
     reponse = r.json()
     if "edit" in reponse and reponse["edit"].get("result") == "Success":
-        print(f"[bienvenue] 🎉 Bienvenue posée sur la PDD de {username}")
+        print(f"[bienvenue-{nom_site}] 🎉 Bienvenue posée sur la PDD de {username}")
         return True
-    print(f"[bienvenue] ❌ Erreur en postant la bienvenue à {username} : {reponse}")
+    print(f"[bienvenue-{nom_site}] ❌ Erreur en postant la bienvenue à {username} : {reponse}")
     return False
 
 
-def boucle_bienvenue():
-    """Boucle principale : à lancer en tâche de fond (thread) ou en script à part."""
-    if not BOT_USERNAME or not BOT_PASSWORD:
-        print("[bienvenue] ❌ VIKIDIA_BOT_USERNAME / VIKIDIA_BOT_PASSWORD manquants ou incorrect, script arrêté.")
+def boucle_bienvenue_site(config):
+    """Boucle pour un site donné (fr ou en), à lancer dans son propre thread."""
+    nom_site = config["nom"]
+    api_url = config["api_url"]
+    username = config["username"]
+    password = config["password"]
+    fichier = config["welcomed_file"]
+    modele_compte = config["modele_compte"]
+    modele_ip = config["modele_ip"]
+
+    if not username or not password:
+        print(f"[bienvenue-{nom_site}] ❌ Identifiants manquants, ce site ne sera pas surveillé.")
         return
 
-    if not se_connecter():
+    session = requests.Session()
+    if not se_connecter(session, api_url, username, password, nom_site):
         return
 
-    data = charger_donnees()
+    data = charger_donnees(fichier)
     deja_accueillis = set(data["users"])
     last_rcid = data["last_rcid"]
 
     while True:
         try:
-            nouvelles, toutes = get_recent_changes(last_rcid)
+            nouvelles, toutes = get_recent_changes(session, api_url, last_rcid)
 
             if toutes:
                 last_rcid = max(c["rcid"] for c in toutes)
 
-            utilisateurs_vus = {c["user"] for c in nouvelles}
+            # Pour chaque auteur vu dans les modifs, on note si c'est une IP (userid == 0) ou un compte
+            auteurs_vus = {}
+            for c in nouvelles:
+                auteurs_vus[c["user"]] = (c.get("userid", 0) == 0)
+
             csrf_token = None
 
-            for username in utilisateurs_vus:
-                if username in deja_accueillis:
+            for username_vu, est_ip in auteurs_vus.items():
+                if username_vu in deja_accueillis:
                     continue
 
-                editcount = get_editcount(username)
-                if editcount != 1:
+                # Le seul critère : sa page de discussion est encore vide
+                if not pdd_est_vide(session, api_url, username_vu):
+                    deja_accueillis.add(username_vu)
                     continue
 
-                if not pdd_est_vide(username):
-                    deja_accueillis.add(username)
-                    continue
+                modele = modele_ip if est_ip else modele_compte
 
                 if csrf_token is None:
-                    csrf_token = obtenir_csrf_token()
+                    csrf_token = obtenir_csrf_token(session, api_url)
 
-                if souhaiter_bienvenue(username, csrf_token):
-                    deja_accueillis.add(username)
+                if souhaiter_bienvenue(session, api_url, username_vu, csrf_token, nom_site, modele):
+                    deja_accueillis.add(username_vu)
                     time.sleep(PAUSE_APRES_MODIF)
 
             data["users"] = list(deja_accueillis)
             data["last_rcid"] = last_rcid
-            sauver_donnees(data)
+            sauver_donnees(fichier, data)
 
         except Exception as e:
-            print(f"[bienvenue] ⚠️ Erreur dans la boucle : {e}")
+            print(f"[bienvenue-{nom_site}] ⚠️ Erreur dans la boucle : {e}")
 
         time.sleep(PAUSE_ENTRE_VERIFS)
+
+
+def boucle_bienvenue():
+    """Point d'entrée : lance un thread par site configuré."""
+    threads = []
+    for config in SITES:
+        t = threading.Thread(target=boucle_bienvenue_site, args=(config,), daemon=True)
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
 
 
 if __name__ == "__main__":
