@@ -1,107 +1,334 @@
-"""
-alerte_et_autre.py
-
-Surveille les catégories Vikidia :
-- Catégorie:Suppression immédiate
-- Catégorie:Demande à traiter
-
-Et envoie un MP Discord (style BotCélian) dès qu'une nouvelle page
-apparaît dans l'une de ces catégories. Vérification toutes les 60 secondes.
-
-À FAIRE dans app.py :
-    from alerte_et_autre import start_watch_categories
-    ...
-    threading.Thread(target=start_watch_categories, args=(bot, OWNER_ID), daemon=True).start()
-    (à mettre à côté de tes autres threading.Thread(...).start(), avant bot.run(TOKEN))
-"""
-
-import time
 import asyncio
+import os
+import time
+
 import requests
-import discord
 
-# ------------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------------
 
-# ⚠️ Vérifie que c'est bien le bon wiki (fr.vikidia.org, en.vikidia.org, etc.)
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 VIKIDIA_API_URL = "https://fr.vikidia.org/w/api.php"
 
-CATEGORIES_SURVEILLEES = {
-    "Catégorie:Suppression immédiate": {
-        "emoji": "🗑️",
-        "titre": "Suppression Immédiate",
-        "couleur": 0xE6B800,
-    },
-    "Catégorie:Demande à traiter": {
-        "emoji": "📌",
-        "titre": "Demande à traiter",
-        "couleur": 0xFF8C00,
-    },
-}
+CATEGORIES_A_SURVEILLER = [
+    "Suppression immédiate",
+    "Demande à traiter",
+]
+
+PDD_BOT = "Discussion utilisateur:Jules88!!Bot"
 
 INTERVALLE_SECONDES = 60
 
-# État interne : pages déjà vues par catégorie
-_pages_deja_vues = {cat: set() for cat in CATEGORIES_SURVEILLEES}
 
+# ============================================================
+# RÉCUPÉRATION DES PAGES D'UNE CATÉGORIE
+# ============================================================
 
-# ------------------------------------------------------------------
-# Fonctions
-# ------------------------------------------------------------------
+def _get_pages_categorie(categorie):
+    pages = []
 
-def _get_pages_categorie(nom_categorie):
-    """Récupère la liste des pages actuellement dans une catégorie Vikidia."""
     params = {
         "action": "query",
         "list": "categorymembers",
-        "cmtitle": nom_categorie,
-        "cmlimit": "50",
+        "cmtitle": f"Catégorie:{categorie}",
+        "cmlimit": "500",
         "format": "json",
     }
-    r = requests.get(VIKIDIA_API_URL, params=params, timeout=10)
-    data = r.json()
-    return {page["title"] for page in data.get("query", {}).get("categorymembers", [])}
+
+    try:
+        response = requests.get(
+            VIKIDIA_API_URL,
+            params=params,
+            timeout=10
+        )
+        response.raise_for_status()
+
+        data = response.json()
+
+        membres = data.get("query", {}).get("categorymembers", [])
+
+        for membre in membres:
+            titre = membre.get("title")
+
+            if titre:
+                pages.append(titre)
+
+    except Exception as e:
+        print(
+            f"[alerte_et_autre] ❌ Erreur récupération "
+            f"catégorie {categorie} : {e}"
+        )
+
+    return pages
 
 
-async def _envoyer_mp_categorie(bot, owner_id, page, style):
-    """Envoie un MP stylé (embed) au propriétaire du bot pour une nouvelle page."""
-    user = await bot.fetch_user(owner_id)
-    embed = discord.Embed(
-        title=f"{style['emoji']} {style['titre']}",
-        description=f"**{page}** a rejoint la catégorie.",
-        color=style["couleur"],
+# ============================================================
+# RÉCUPÉRATION DE LA DERNIÈRE RÉVISION DE LA PDD
+# ============================================================
+
+def _get_derniere_revision_pdd():
+    params = {
+        "action": "query",
+        "prop": "revisions",
+        "titles": PDD_BOT,
+        "rvprop": "ids|timestamp",
+        "rvlimit": "1",
+        "format": "json",
+    }
+
+    try:
+        response = requests.get(
+            VIKIDIA_API_URL,
+            params=params,
+            timeout=10
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        pages = data.get(
+            "query",
+            {}
+        ).get(
+            "pages",
+            {}
+        )
+
+        for page in pages.values():
+
+            revisions = page.get(
+                "revisions",
+                []
+            )
+
+            if revisions:
+
+                return revisions[0].get(
+                    "revid"
+                )
+
+    except Exception as e:
+
+        print(
+            f"[alerte_et_autre] ❌ Erreur récupération "
+            f"révision PDD : {e}"
+        )
+
+    return None
+
+
+# ============================================================
+# ENVOI DU MESSAGE PRIVÉ DISCORD
+# ============================================================
+
+async def _envoyer_mp_arret_async(bot, owner_id):
+
+    try:
+
+        utilisateur = await bot.fetch_user(
+            int(owner_id)
+        )
+
+        embed = {
+            "title": "🛑 Arrêt de KataBump",
+            "description": (
+                "Une nouvelle modification a été détectée "
+                "sur la page de discussion du bot :\n\n"
+                f"`{PDD_BOT}`\n\n"
+                "KataBump va maintenant s'arrêter."
+            ),
+            "color": 0xFF0000,
+        }
+
+        # Création d'un embed Discord
+        import discord
+
+        discord_embed = discord.Embed(
+            title=embed["title"],
+            description=embed["description"],
+            color=embed["color"],
+        )
+
+        await utilisateur.send(
+            embed=discord_embed
+        )
+
+        print(
+            "[alerte_et_autre] ✅ Message privé envoyé."
+        )
+
+    except Exception as e:
+
+        print(
+            f"[alerte_et_autre] ❌ Impossible d'envoyer "
+            f"le message privé : {e}"
+        )
+
+        raise
+
+
+def _envoyer_mp_arret(bot, owner_id):
+
+    try:
+
+        loop = bot.loop
+
+        if loop.is_running():
+
+            future = asyncio.run_coroutine_threadsafe(
+                _envoyer_mp_arret_async(
+                    bot,
+                    owner_id
+                ),
+                loop
+            )
+
+            future.result(
+                timeout=15
+            )
+
+        else:
+
+            asyncio.run(
+                _envoyer_mp_arret_async(
+                    bot,
+                    owner_id
+                )
+            )
+
+    except Exception as e:
+
+        print(
+            f"[alerte_et_autre] ❌ Erreur envoi MP : {e}"
+        )
+
+
+# ============================================================
+# ARRÊT DE KATABUMP
+# ============================================================
+
+def _arreter_katabump():
+
+    print(
+        "[alerte_et_autre] 🛑 Arrêt de KataBump..."
     )
-    embed.timestamp = discord.utils.utcnow()
-    embed.set_footer(text="Vikidia • Surveillance auto")
-    await user.send(embed=embed)
 
+    # Arrêt immédiat du processus
+    os._exit(0)
+
+
+# ============================================================
+# SURVEILLANCE
+# ============================================================
 
 def start_watch_categories(bot, owner_id):
-    """
-    Boucle de surveillance à lancer dans un thread à part.
 
-    Exemple d'utilisation dans app.py :
-        threading.Thread(target=start_watch_categories, args=(bot, OWNER_ID), daemon=True).start()
-    """
-    # État initial : on note ce qui existe déjà, sans envoyer de MP au démarrage
-    for cat in CATEGORIES_SURVEILLEES:
-        try:
-            _pages_deja_vues[cat] = _get_pages_categorie(cat)
-        except Exception as e:
-            print(f"[alerte_et_autre] Erreur initialisation ({cat}) : {e}")
+    print(
+        "[alerte_et_autre] 👀 Surveillance démarrée."
+    )
+
+    print(
+        f"[alerte_et_autre] 📄 PDD surveillée : {PDD_BOT}"
+    )
+
+    print(
+        f"[alerte_et_autre] ⏱️ Vérification toutes les "
+        f"{INTERVALLE_SECONDES} secondes."
+    )
+
+    # --------------------------------------------------------
+    # On récupère la révision actuelle au démarrage.
+    #
+    # Cela signifie qu'une modification déjà présente avant
+    # le démarrage ne déclenchera PAS immédiatement l'arrêt.
+    # --------------------------------------------------------
+
+    derniere_revision_pdd = _get_derniere_revision_pdd()
+
+    print(
+        f"[alerte_et_autre] "
+        f"Révision actuelle de la PDD : "
+        f"{derniere_revision_pdd}"
+    )
 
     while True:
-        time.sleep(INTERVALLE_SECONDES)
-        for cat, style in CATEGORIES_SURVEILLEES.items():
-            try:
-                pages_actuelles = _get_pages_categorie(cat)
-                nouvelles = pages_actuelles - _pages_deja_vues[cat]
-                for page in nouvelles:
-                    asyncio.run_coroutine_threadsafe(
-                        _envoyer_mp_categorie(bot, owner_id, page, style),
-                        bot.loop,
+
+        try:
+
+            # =================================================
+            # SURVEILLANCE DES CATÉGORIES
+            # =================================================
+
+            for categorie in CATEGORIES_A_SURVEILLER:
+
+                pages = _get_pages_categorie(
+                    categorie
+                )
+
+                if pages:
+
+                    print(
+                        f"[alerte_et_autre] 📂 "
+                        f"{categorie} : "
+                        f"{len(pages)} page(s)"
                     )
-                _pages_deja_vues[cat] = pages_actuelles
-            except Exception as e:
-                print(f"[alerte_et_autre] Erreur watch_categories ({cat}) : {e}")
+
+            # =================================================
+            # SURVEILLANCE DE LA PDD
+            # =================================================
+
+            nouvelle_revision = _get_derniere_revision_pdd()
+
+            if nouvelle_revision is not None:
+
+                if derniere_revision_pdd is not None:
+
+                    if nouvelle_revision != derniere_revision_pdd:
+
+                        print(
+                            "[alerte_et_autre] 🚨 "
+                            "NOUVELLE MODIFICATION DÉTECTÉE "
+                            "SUR LA PDD !"
+                        )
+
+                        print(
+                            f"[alerte_et_autre] "
+                            f"Ancienne révision : "
+                            f"{derniere_revision_pdd}"
+                        )
+
+                        print(
+                            f"[alerte_et_autre] "
+                            f"Nouvelle révision : "
+                            f"{nouvelle_revision}"
+                        )
+
+                        # -------------------------------------
+                        # Envoi du MP AVANT l'arrêt
+                        # -------------------------------------
+
+                        _envoyer_mp_arret(
+                            bot,
+                            owner_id
+                        )
+
+                        # -------------------------------------
+                        # Arrêt de KataBump
+                        # -------------------------------------
+
+                        _arreter_katabump()
+
+                derniere_revision_pdd = nouvelle_revision
+
+        except Exception as e:
+
+            print(
+                f"[alerte_et_autre] ❌ Erreur dans la "
+                f"surveillance : {e}"
+            )
+
+        time.sleep(
+            INTERVALLE_SECONDES
+        )
